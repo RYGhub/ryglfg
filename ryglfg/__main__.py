@@ -34,7 +34,7 @@ app = f.FastAPI(
 )
 app.add_middleware(
     cors.CORSMiddleware,
-    allow_origins=config["api.allow_origins"],
+    allow_origins=config["api.alloworigins"],
     allow_methods=["*"],
     allow_headers=["*"],
 )
