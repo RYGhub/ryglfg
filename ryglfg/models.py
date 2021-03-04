@@ -13,7 +13,7 @@ import pydantic as p
 import datetime
 
 # Internal imports
-from .database import AnnouncementState, ResponseChoice
+from .database import AnnouncementState, ResponseChoice, WebhookFormat
 
 # Special global objects
 log = logging.getLogger(__name__)
@@ -40,6 +40,11 @@ class ResponseEditable(ORMModel):
     choice: ResponseChoice
 
 
+class WebhookEditable(ORMModel):
+    url: str
+    format: WebhookFormat
+
+
 class AnnouncementBasic(AnnouncementEditable):
     aid: int
     creator_id: str
@@ -57,6 +62,10 @@ class ResponseBasic(ResponseEditable):
     editing_time: datetime.datetime
 
 
+class WebhookBasic(WebhookEditable):
+    wid: int
+
+
 class AnnouncementFull(AnnouncementBasic):
     responses: t.List[ResponseBasic]
 
@@ -65,10 +74,20 @@ class ResponseFull(ResponseBasic):
     announcement: AnnouncementBasic
 
 
+class WebhookFull(WebhookBasic):
+    pass
+
+
+
 # Objects exported by this module
 __all__ = (
+    "AnnouncementEditable",
+    "ResponseEditable",
+    "WebhookEditable",
     "AnnouncementBasic",
     "ResponseBasic",
+    "WebhookBasic",
     "AnnouncementFull",
     "ResponseFull",
+    "WebhookFull",
 )

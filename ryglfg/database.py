@@ -53,11 +53,11 @@ def determine_default_autoclose_time(context):
     return context.get_current_parameters()["creation_time"] + datetime.timedelta(hours=1)
 
 
-class AnnouncementState(str, enum.Enum):
-    NOT_OPEN_YET = "not_open_yet"
-    LOOKING_FOR_GROUP = "looking_for_group"
-    EVENT_STARTED = "event_started"
-    EVENT_CANCELLED = "event_cancelled"
+class AnnouncementState(int, enum.Enum):
+    NOT_OPEN_YET = -1
+    LOOKING_FOR_GROUP = 0
+    EVENT_STARTED = 1
+    EVENT_CANCELLED = 2
 
 
 class Announcement(Base, ra.ColRepr, ra.Updatable):
@@ -100,6 +100,26 @@ class Response(Base, ra.ColRepr, ra.Updatable):
     announcement = so.relationship("Announcement", back_populates="responses")
 
 
+class WebhookFormat(str, enum.Enum):
+    RYGLFG = "ryglfg"
+
+
+class Webhook(Base, ra.ColRepr, ra.Updatable):
+    __tablename__ = "lfg_webhooks"
+
+    wid = s.Column("aid", s.Integer, primary_key=True)
+
+    url = s.Column("url", s.String, nullable=False)
+    format = s.Column("format", s.Enum(WebhookFormat), nullable=False, default=WebhookFormat.RYGLFG)
+
+
+# noinspection PyPep8Naming
+def DatabaseSession():
+    Session = lazy_Session.evaluate()
+    with Session(future=True) as session:
+        yield session
+
+
 # Objects exported by this module
 __all__ = (
     "lazy_engine",
@@ -109,4 +129,7 @@ __all__ = (
     "Announcement",
     "ResponseChoice",
     "Response",
+    "WebhookFormat",
+    "Webhook",
+    "DatabaseSession",
 )
