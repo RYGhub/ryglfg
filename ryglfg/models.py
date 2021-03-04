@@ -78,6 +78,18 @@ class WebhookFull(WebhookBasic):
     pass
 
 
+class Event(Model):
+    type: str
+
+
+class EventAnnouncement(Event):
+    announcement: AnnouncementFull
+
+
+class EventResponse(Event):
+    response: ResponseFull
+    code: int
+
 
 # Objects exported by this module
 __all__ = (
@@ -90,4 +102,7 @@ __all__ = (
     "AnnouncementFull",
     "ResponseFull",
     "WebhookFull",
+    "Event",
+    "EventAnnouncement",
+    "EventResponse",
 )

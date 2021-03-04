@@ -53,11 +53,11 @@ def determine_default_autoclose_time(context):
     return context.get_current_parameters()["creation_time"] + datetime.timedelta(hours=1)
 
 
-class AnnouncementState(int, enum.Enum):
-    NOT_OPEN_YET = -1
-    LOOKING_FOR_GROUP = 0
-    EVENT_STARTED = 1
-    EVENT_CANCELLED = 2
+class AnnouncementState(enum.IntEnum):
+    PLANNED = -1
+    OPEN = 0
+    STARTED = 1
+    CANCELLED = 2
 
 
 class Announcement(Base, ra.ColRepr, ra.Updatable):
@@ -74,7 +74,7 @@ class Announcement(Base, ra.ColRepr, ra.Updatable):
     autostart_time = s.Column("autostart_time", s.DateTime, nullable=False, default=determine_default_autoclose_time)
     closer_id = s.Column("closer_id", s.String)
     closure_time = s.Column("closure_time", s.DateTime)
-    state = s.Column("state", s.Enum(AnnouncementState), nullable=False, default=AnnouncementState.NOT_OPEN_YET)
+    state = s.Column("state", s.Enum(AnnouncementState), nullable=False, default=AnnouncementState.PLANNED)
     
     responses = so.relationship("Response", back_populates="announcement", cascade="all, delete-orphan")
 

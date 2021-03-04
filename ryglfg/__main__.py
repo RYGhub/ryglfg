@@ -10,6 +10,8 @@ import typing as t
 # External imports
 import logging
 import uvicorn
+import threading
+import datetime
 import fastapi as f
 import fastapi.middleware.cors as cors
 import sqlalchemy.orm as so
@@ -30,6 +32,90 @@ app = f.FastAPI(
     description='The "Looking For Group" service of the RYG community',
 )
 CurrentUser = auth.Auth0CustomUser(domain=config["authzero.domain"])
+planned_event = threading.Event()
+open_event = threading.Event()
+
+
+# Waiter threads
+def planned_event_manager():
+    log.info("Starting planned event manager...")
+    Session = database.lazy_Session.evaluate()
+    while True:
+        with Session(future=True) as session:
+            lfg = session.execute(
+                ss.select(database.Announcement)
+                  .where(database.Announcement.state == database.AnnouncementState.PLANNED)
+                  .order_by(database.Announcement.opening_time)
+            ).scalar()
+            if lfg is not None:
+                aid = lfg.aid
+                timeout = (lfg.opening_time - datetime.datetime.now()).total_seconds()
+            else:
+                aid = None
+                timeout = None
+
+        try:
+            if timeout is not None and timeout < 0:
+                raise TimeoutError()
+            planned_event.wait(timeout=timeout)
+        except TimeoutError:
+            with Session(future=True) as session:
+                lfg = session.execute(
+                    ss.select(database.Announcement)
+                      .where(database.Announcement.aid == aid)
+                ).scalar()
+                lfg.state = database.AnnouncementState.OPEN
+                session.commit()
+
+                open_event.set()
+
+                for webhook in session.execute(ss.select(database.Webhook)).scalars():
+                    requests.post(webhook.url, data=models.EventAnnouncement(
+                        type="open",
+                        announcement=models.AnnouncementFull.from_orm(lfg),
+                    ).json())
+        else:
+            planned_event.clear()
+
+
+def open_event_manager():
+    log.info("Starting open event manager...")
+    Session = database.lazy_Session.evaluate()
+    while True:
+        with Session(future=True) as session:
+            lfg = session.execute(
+                ss.select(database.Announcement)
+                  .where(database.Announcement.state == database.AnnouncementState.OPEN)
+                  .order_by(database.Announcement.opening_time)
+            ).scalar()
+            if lfg is not None:
+                aid = lfg.aid
+                timeout = (lfg.autostart_time - datetime.datetime.now()).total_seconds()
+            else:
+                aid = None
+                timeout = None
+
+        try:
+            if timeout is not None and timeout < 0:
+                raise TimeoutError()
+            open_event.wait(timeout=timeout)
+        except TimeoutError:
+            with Session(future=True) as session:
+                lfg = session.execute(
+                    ss.select(database.Announcement)
+                      .where(database.Announcement.aid == aid)
+                ).scalar()
+                lfg.state = database.AnnouncementState.STARTED
+                lfg.closure_time = datetime.datetime.now()
+                session.commit()
+
+                for webhook in session.execute(ss.select(database.Webhook)).scalars():
+                    requests.post(webhook.url, data=models.EventAnnouncement(
+                        type="autostart",
+                        announcement=models.AnnouncementFull.from_orm(lfg),
+                    ).json())
+        else:
+            open_event.clear()
 
 
 # API routes
@@ -79,12 +165,12 @@ def lfg_get(
         raise f.HTTPException(403, "Missing `read:lfg` scope.")
 
     query = ss.select(database.Announcement)
-    query = query.where(database.Announcement.state == filter_state) if filter_state else query
+    query = query.where(database.Announcement.state == filter_state) if filter_state is not None else query
     query = query.offset(offset)
     query = query.limit(limit)
     query = query.order_by(database.Announcement.autostart_time)
     results = session.execute(query)
-    return results.scalars()
+    return list(results.scalars())
 
 
 @app.post(
@@ -119,11 +205,13 @@ def lfg_post(
     session.add(lfg)
     session.commit()
 
+    planned_event.set()
+
     for webhook in session.execute(ss.select(database.Webhook)).scalars():
-        requests.post(webhook.url, json={
-            "type": "create",
-            "event": models.AnnouncementFull.from_orm(lfg).json(),
-        })
+        requests.post(webhook.url, data=models.EventAnnouncement(
+            type="create",
+            announcement=models.AnnouncementFull.from_orm(lfg),
+        ).json())
 
     return lfg
 
@@ -174,7 +262,9 @@ def lfg_put(
     Set the data of the specified LFG to the request body.
 
     Requires the `edit:lfg` scope.
+
     If you're trying to edit a LFG you're not the creator of, additionally requires the `edit:lfg_sudo` scope.
+
     If you're trying to edit a started or cancelled LFG, additionally requires the `edit:lfg_admin` scope.
     """
     if "edit:lfg" not in cu.permissions:
@@ -190,11 +280,17 @@ def lfg_put(
     if lfg.creator_id != cu.sub and "edit:lfg_sudo" not in cu.permissions:
         raise f.HTTPException(403, "Missing `edit:lfg_sudo` scope.")
 
-    if lfg.state > database.AnnouncementState.LOOKING_FOR_GROUP and "edit:lfg_admin" not in cu.permissions:
+    if lfg.state > database.AnnouncementState.OPEN and "edit:lfg_admin" not in cu.permissions:
         raise f.HTTPException(403, "Missing `edit:lfg_admin` scope.")
 
     lfg.update(**data.dict())
     session.commit()
+
+    if lfg.state == database.AnnouncementState.PLANNED:
+        planned_event.set()
+    elif lfg.state == database.AnnouncementState.OPEN:
+        open_event.set()
+
     return lfg
 
 
@@ -228,6 +324,11 @@ def lfg_delete(
         session.delete(lfg)
         session.commit()
 
+    if lfg.state == database.AnnouncementState.PLANNED:
+        planned_event.set()
+    elif lfg.state == database.AnnouncementState.OPEN:
+        open_event.set()
+
     return f.Response(status_code=204)
 
 
@@ -243,13 +344,15 @@ def lfg_start(
         session: so.Session = f.Depends(database.DatabaseSession),
 
         aid: int = f.Path(..., description="The id of the LFG that you want to start."),
-        user: t.Optional[str] = f.Query(None, description="The id of the user you are answering on behalf of."),
+        user: t.Optional[str] = f.Query(None, description="The id of the user you are acting on behalf of."),
 ):
     """
     Start a LFG, sending notifications via the webhooks.
 
     Requires the `start:lfg` scope.
+
     Additionally requires the `start:lfg_sudo` if you're acting on behalf of another user.
+
     Additionally requires the `start:lfg_admin` if you're trying to start another user's LFG.
     """
     if "start:lfg" not in cu.permissions:
@@ -271,16 +374,20 @@ def lfg_start(
     if "start:lfg_admin" not in cu.permissions and user != lfg.creator_id:
         raise f.HTTPException(403, "Missing `start:lfg_admin` scope.")
 
-    if lfg.state != database.AnnouncementState.LOOKING_FOR_GROUP:
-        raise f.HTTPException(409, "LFG is not in the `LOOKING_FOR_GROUP` state.")
+    if lfg.state != database.AnnouncementState.OPEN:
+        raise f.HTTPException(409, "LFG is not in the `OPEN` state.")
 
-    lfg.state = database.AnnouncementState.EVENT_STARTED
+    lfg.state = database.AnnouncementState.STARTED
+    lfg.closure_time = datetime.datetime.now()
+    lfg.closure_id = user
+
+    session.commit()
 
     for webhook in session.execute(ss.select(database.Webhook)).scalars():
-        requests.post(webhook.url, json={
-            "type": "start",
-            "event": models.AnnouncementFull.from_orm(lfg).json(),
-        })
+        requests.post(webhook.url, data=models.EventAnnouncement(
+            type="start",
+            announcement=models.AnnouncementFull.from_orm(lfg),
+        ).json())
 
     return lfg
 
@@ -297,13 +404,15 @@ def lfg_cancel(
         session: so.Session = f.Depends(database.DatabaseSession),
 
         aid: int = f.Path(..., description="The id of the LFG that you want to cancel."),
-        user: t.Optional[str] = f.Query(None, description="The id of the user you are answering on behalf of."),
+        user: t.Optional[str] = f.Query(None, description="The id of the user you are acting on behalf of."),
 ):
     """
     Cancel a LFG, sending notifications via the webhooks.
 
     Requires the `cancel:lfg` scope.
+
     Additionally requires the `cancel:lfg_sudo` if you're acting on behalf of another user.
+
     Additionally requires the `cancel:lfg_admin` if you're trying to start another user's LFG.
     """
     if "cancel:lfg" not in cu.permissions:
@@ -325,16 +434,20 @@ def lfg_cancel(
     if "cancel:lfg_admin" not in cu.permissions and user != lfg.creator_id:
         raise f.HTTPException(403, "Missing `cancel:lfg_admin` scope.")
 
-    if lfg.state != database.AnnouncementState.LOOKING_FOR_GROUP:
-        raise f.HTTPException(409, "LFG is not in the `LOOKING_FOR_GROUP` state.")
+    if lfg.state > database.AnnouncementState.OPEN:
+        raise f.HTTPException(409, "LFG has already closed.")
 
-    lfg.state = database.AnnouncementState.EVENT_CANCELLED
+    lfg.state = database.AnnouncementState.CANCELLED
+    lfg.closure_time = datetime.datetime.now()
+    lfg.closure_id = user
+
+    session.commit()
 
     for webhook in session.execute(ss.select(database.Webhook)).scalars():
-        requests.post(webhook.url, json={
-            "type": "cancel",
-            "event": models.AnnouncementFull.from_orm(lfg).json(),
-        })
+        requests.post(webhook.url, data=models.EventAnnouncement(
+            type="cancel",
+            announcement=models.AnnouncementFull.from_orm(lfg),
+        ).json())
 
     return lfg
 
@@ -349,15 +462,17 @@ def lfg_answer_put(
         *,
         cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
         session: so.Session = f.Depends(database.DatabaseSession),
+        fr: f.Response,
 
         aid: int = f.Path(..., description="The id of the LFG that should be answered."),
         user: t.Optional[str] = f.Query(None, description="The id of the user you are answering on behalf of."),
-        data: models.AnnouncementEditable = f.Body(..., description="The data of the response."),
+        data: models.ResponseEditable = f.Body(..., description="The data of the response."),
 ):
     """
     Respond to a LFG, or edit the response if it had already been sent, sending notifications via the webhooks.
 
     Requires the `answer:lfg` scope.
+
     Additionally requires the `answer:lfg_sudo` scope if you are answering on behalf of another user.
     """
     if "answer:lfg" not in cu.permissions:
@@ -380,23 +495,23 @@ def lfg_answer_put(
 
     if response is None:
         # noinspection PyArgumentList
-        response = database.Response(**data.dict(), partecipant_id=user)
+        response = database.Response(**data.dict(), aid=aid, partecipant_id=user)
         session.add(response)
-        code = 201
+        fr.status_code = 201
     else:
         response.update(**data.dict())
-        code = 200
+        fr.status_code = 200
 
     session.commit()
 
     for webhook in session.execute(ss.select(database.Webhook)).scalars():
-        requests.post(webhook.url, json={
-            "what": "answer",
-            "type": "new" if code == 201 else "change",
-            "event": models.ResponseFull.from_orm(response).json(),
-        })
+        requests.post(webhook.url, data=models.EventResponse(
+            type="answer",
+            code=fr.status_code,
+            response=models.ResponseFull.from_orm(response),
+        ).json())
 
-    return f.Response(response, status_code=code)
+    return response
 
 
 @app.get(
@@ -422,7 +537,7 @@ def webhooks_get(
         ss.select(database.Webhook)
     ).scalars()
 
-    return [models.WebhookFull.from_orm(result) for result in results]
+    return list(results)
 
 
 @app.post(
@@ -442,6 +557,7 @@ def webhooks_post(
     Create a new webhook.
 
     Only a single format is currently supported:
+
     - `ryglfg` sends data in a custom JSON format
 
     Requires the `create:webhooks` scope.
@@ -515,9 +631,9 @@ def webhooks_test(
     ).scalar()
 
     if webhook.format == database.WebhookFormat.RYGLFG:
-        requests.post(webhook.url, json={
-            "type": "test",
-        })
+        requests.post(webhook.url, data=models.Event(
+            type="test",
+        ).json())
 
     return f.Response(status_code=204)
 
@@ -525,4 +641,6 @@ def webhooks_test(
 # Run the API
 if __name__ == "__main__":
     database.init_db()
+    threading.Thread(name="Event Manager (planned)", target=planned_event_manager, daemon=True).start()
+    threading.Thread(name="Event Manager (open)", target=open_event_manager, daemon=True).start()
     uvicorn.run(app, port=globals.lazy_config.e["api.port"])
