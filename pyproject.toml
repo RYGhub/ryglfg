@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ryglfg"
-version = "0.1.0"
+version = "1.0.0"
 description = ""
 authors = ["Stefano Pigozzi <me@steffo.eu>"]
 license = "AGPL-3.0-or-later"

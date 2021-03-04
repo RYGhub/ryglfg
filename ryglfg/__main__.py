@@ -30,6 +30,13 @@ config = globals.lazy_config.evaluate()
 app = f.FastAPI(
     title="RYGlfg",
     description='The "Looking For Group" service of the RYG community',
+    version="1.0.0",
+)
+app.add_middleware(
+    cors.CORSMiddleware,
+    allow_origins=config["api.allow_origins"],
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 CurrentUser = auth.Auth0CustomUser(domain=config["authzero.domain"])
 planned_event = threading.Event()
