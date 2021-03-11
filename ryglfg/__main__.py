@@ -43,6 +43,12 @@ planned_event = threading.Event()
 open_event = threading.Event()
 
 
+def send_message(session, message):
+    for webhook in session.execute(ss.select(database.Webhook)).scalars():
+        if webhook.format == database.WebhookFormat.RYGLFG:
+            requests.post(webhook.url, data=message)
+
+
 # Waiter threads
 def planned_event_manager():
     log.info("Starting planned event manager...")
@@ -76,11 +82,10 @@ def planned_event_manager():
 
                 open_event.set()
 
-                for webhook in session.execute(ss.select(database.Webhook)).scalars():
-                    requests.post(webhook.url, data=models.EventAnnouncement(
-                        type="open",
-                        announcement=models.AnnouncementFull.from_orm(lfg),
-                    ).json())
+                send_message(session, models.EventAnnouncement(
+                    type="open",
+                    announcement=models.AnnouncementFull.from_orm(lfg),
+                ).json())
         else:
             planned_event.clear()
 
@@ -116,11 +121,10 @@ def open_event_manager():
                 lfg.closure_time = datetime.datetime.now()
                 session.commit()
 
-                for webhook in session.execute(ss.select(database.Webhook)).scalars():
-                    requests.post(webhook.url, data=models.EventAnnouncement(
-                        type="autostart",
-                        announcement=models.AnnouncementFull.from_orm(lfg),
-                    ).json())
+                send_message(session, models.EventAnnouncement(
+                    type="autostart",
+                    announcement=models.AnnouncementFull.from_orm(lfg),
+                ).json())
         else:
             open_event.clear()
 
@@ -214,11 +218,10 @@ def lfg_post(
 
     planned_event.set()
 
-    for webhook in session.execute(ss.select(database.Webhook)).scalars():
-        requests.post(webhook.url, data=models.EventAnnouncement(
-            type="create",
-            announcement=models.AnnouncementFull.from_orm(lfg),
-        ).json())
+    send_message(session, models.EventAnnouncement(
+        type="create",
+        announcement=models.AnnouncementFull.from_orm(lfg),
+    ).json())
 
     return lfg
 
@@ -390,11 +393,10 @@ def lfg_start(
 
     session.commit()
 
-    for webhook in session.execute(ss.select(database.Webhook)).scalars():
-        requests.post(webhook.url, data=models.EventAnnouncement(
-            type="start",
-            announcement=models.AnnouncementFull.from_orm(lfg),
-        ).json())
+    send_message(session, models.EventAnnouncement(
+        type="start",
+        announcement=models.AnnouncementFull.from_orm(lfg),
+    ).json())
 
     return lfg
 
@@ -450,11 +452,10 @@ def lfg_cancel(
 
     session.commit()
 
-    for webhook in session.execute(ss.select(database.Webhook)).scalars():
-        requests.post(webhook.url, data=models.EventAnnouncement(
-            type="cancel",
-            announcement=models.AnnouncementFull.from_orm(lfg),
-        ).json())
+    send_message(session, models.EventAnnouncement(
+        type="cancel",
+        announcement=models.AnnouncementFull.from_orm(lfg),
+    ).json())
 
     return lfg
 
@@ -511,12 +512,11 @@ def lfg_answer_put(
 
     session.commit()
 
-    for webhook in session.execute(ss.select(database.Webhook)).scalars():
-        requests.post(webhook.url, data=models.EventResponse(
-            type="answer",
-            code=fr.status_code,
-            response=models.ResponseFull.from_orm(response),
-        ).json())
+    send_message(session, models.EventResponse(
+        type="answer",
+        code=fr.status_code,
+        response=models.ResponseFull.from_orm(response),
+    ).json())
 
     return response
 
