@@ -23,7 +23,7 @@ log = logging.getLogger(__name__)
 class Auth0CustomClaims(p.BaseModel):
     iss: str
     sub: str
-    aud: t.List[str]
+    aud: t.Union[t.List[str], str]
     iat: int
     exp: int
     azp: str
