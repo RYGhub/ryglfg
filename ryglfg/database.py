@@ -68,12 +68,12 @@ class Announcement(Base, ra.ColRepr, ra.Updatable):
     title = s.Column("title", s.String, nullable=False, default="")
     description = s.Column("description", s.Text, nullable=False, default="")
     creator_id = s.Column("creator_id", s.String, nullable=False)
-    creation_time = s.Column("creation_time", s.DateTime, nullable=False,  default=now)
-    editing_time = s.Column("editing_time", s.DateTime, nullable=False, default=now, onupdate=now)
-    opening_time = s.Column("opening_time", s.DateTime, nullable=False, default=now)
-    autostart_time = s.Column("autostart_time", s.DateTime, nullable=False, default=determine_default_autoclose_time)
+    creation_time = s.Column("creation_time", s.DateTime(timezone=True), nullable=False,  default=now)
+    editing_time = s.Column("editing_time", s.DateTime(timezone=True), nullable=False, default=now, onupdate=now)
+    opening_time = s.Column("opening_time", s.DateTime(timezone=True), nullable=False, default=now)
+    autostart_time = s.Column("autostart_time", s.DateTime(timezone=True), nullable=False, default=determine_default_autoclose_time)
     closer_id = s.Column("closer_id", s.String)
-    closure_time = s.Column("closure_time", s.DateTime)
+    closure_time = s.Column("closure_time", s.DateTime(timezone=True))
     state = s.Column("state", s.Enum(AnnouncementState), nullable=False, default=AnnouncementState.PLANNED)
     
     responses = so.relationship("Response", back_populates="announcement", cascade="all, delete-orphan")
@@ -93,8 +93,8 @@ class Response(Base, ra.ColRepr, ra.Updatable):
     aid = s.Column("aid", s.Integer, s.ForeignKey(Announcement.aid), primary_key=True)
     partecipant_id = s.Column("partecipant_id", s.String, primary_key=True)
 
-    posting_time = s.Column("posting_time", s.DateTime, nullable=False, default=now)
-    editing_time = s.Column("editing_time", s.DateTime, nullable=False, default=now, onupdate=now)
+    posting_time = s.Column("posting_time", s.DateTime(timezone=True), nullable=False, default=now)
+    editing_time = s.Column("editing_time", s.DateTime(timezone=True), nullable=False, default=now, onupdate=now)
     choice = s.Column("choice", s.Enum(ResponseChoice), nullable=False, default=ResponseChoice.UNSET)
 
     announcement = so.relationship("Announcement", back_populates="responses")
