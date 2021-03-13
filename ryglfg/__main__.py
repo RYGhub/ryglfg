@@ -62,7 +62,7 @@ def planned_event_manager():
             ).scalar()
             if lfg is not None:
                 aid = lfg.aid
-                timeout = (lfg.opening_time - datetime.datetime.now()).total_seconds()
+                timeout = (lfg.opening_time - datetime.datetime.now(tz=datetime.timezone.utc)).total_seconds()
             else:
                 aid = None
                 timeout = None
@@ -102,7 +102,7 @@ def open_event_manager():
             ).scalar()
             if lfg is not None:
                 aid = lfg.aid
-                timeout = (lfg.autostart_time - datetime.datetime.now()).total_seconds()
+                timeout = (lfg.autostart_time - datetime.datetime.now(tz=datetime.timezone.utc)).total_seconds()
             else:
                 aid = None
                 timeout = None
@@ -118,7 +118,7 @@ def open_event_manager():
                       .where(database.Announcement.aid == aid)
                 ).scalar()
                 lfg.state = database.AnnouncementState.STARTED
-                lfg.closure_time = datetime.datetime.now()
+                lfg.closure_time = datetime.datetime.now(tz=datetime.timezone.utc)
                 session.commit()
 
                 send_message(session, models.EventAnnouncement(
@@ -388,7 +388,7 @@ def lfg_start(
         raise f.HTTPException(409, "LFG is not in the `OPEN` state.")
 
     lfg.state = database.AnnouncementState.STARTED
-    lfg.closure_time = datetime.datetime.now()
+    lfg.closure_time = datetime.datetime.now(tz=datetime.timezone.utc)
     lfg.closure_id = user
 
     session.commit()
@@ -447,7 +447,7 @@ def lfg_cancel(
         raise f.HTTPException(409, "LFG has already closed.")
 
     lfg.state = database.AnnouncementState.CANCELLED
-    lfg.closure_time = datetime.datetime.now()
+    lfg.closure_time = datetime.datetime.now(tz=datetime.timezone.utc)
     lfg.closure_id = user
 
     session.commit()
