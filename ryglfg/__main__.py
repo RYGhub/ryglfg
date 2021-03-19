@@ -17,6 +17,7 @@ import fastapi.middleware.cors as cors
 import sqlalchemy.orm as so
 import sqlalchemy.sql as ss
 import requests
+import dataclasses
 
 # Internal imports
 from . import globals
@@ -38,7 +39,41 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-CurrentUser = auth.Auth0CustomUser(domain=config["authzero.domain"])
+CurrentUser = auth.Auth0User(domain=config["authzero.domain"])
+
+
+@dataclasses.dataclass()
+class LoginSession:
+    cu: auth.Auth0AccessClaims
+    session: so.Session
+
+
+def dep_loginsession(
+        cu: auth.Auth0AccessClaims = f.Depends(CurrentUser),
+        session: so.Session = f.Depends(database.DatabaseSession),
+):
+    db_user: t.Optional[database.User] = session.execute(
+        ss.select(database.User).where(database.User.sub == cu.sub)
+    ).scalar()
+    if db_user is None:
+        db_user = database.User(
+            sub=cu.sub,
+            last_update=datetime.datetime.now(),
+            name=cu.ryg_name,
+            picture=cu.ryg_picture,
+        )
+        session.add(db_user)
+    else:
+        db_user.update(
+            sub=cu.sub,
+            last_update=datetime.datetime.now(),
+            name=cu.ryg_name,
+            picture=cu.ryg_picture,
+        )
+    session.commit()
+    return LoginSession(cu=cu, session=session)
+
+
 planned_event = threading.Event()
 open_event = threading.Event()
 
@@ -133,17 +168,17 @@ def open_event_manager():
 @app.get(
     "/auth",
     summary="Check your user status.",
-    response_model=auth.Auth0CustomClaims,
+    response_model=auth.Auth0AccessClaims,
     tags=["Authorization"],
 )
 def auth_get(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser)
+        ls: LoginSession = f.Depends(dep_loginsession),
 ):
     """
     Decode and verify the signature of your current JWT, returning its contents.
     """
-    return cu
+    return ls.cu
 
 
 @app.get(
@@ -154,8 +189,7 @@ def auth_get(
 )
 def lfg_get(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
 
         limit: int = f.Query(
             50, description="The number of LFGs that will be returned.", ge=0, le=500
@@ -172,7 +206,7 @@ def lfg_get(
 
     Requires the `read:lfg` scope.
     """
-    if "read:lfg" not in cu.permissions:
+    if "read:lfg" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `read:lfg` scope.")
 
     query = ss.select(database.Announcement)
@@ -180,7 +214,7 @@ def lfg_get(
     query = query.offset(offset)
     query = query.limit(limit)
     query = query.order_by(database.Announcement.autostart_time)
-    results = session.execute(query)
+    results = ls.session.execute(query)
     return list(results.scalars())
 
 
@@ -192,7 +226,7 @@ def lfg_get(
 )
 def lfg_post(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
+        ls: LoginSession = f.Depends(dep_loginsession),
         session: so.Session = f.Depends(database.DatabaseSession),
         user: t.Optional[str] = f.Query(None, description="The user on behalf of which you are acting."),
         data: models.AnnouncementEditable = f.Body(..., description="The data of the LFG you are creating."),
@@ -202,13 +236,13 @@ def lfg_post(
 
     Requires the `create:lfg` scope, or the `create:lfg_sudo` scope if you're creating a LFG on behalf of another user.
     """
-    if "create:lfg" not in cu.permissions:
+    if "create:lfg" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `create:lfg` scope.")
 
     if user is None:
-        user = cu.sub
+        user = ls.cu.sub
 
-    if "create:lfg_sudo" not in cu.permissions and user != cu.sub:
+    if "create:lfg_sudo" not in ls.cu.permissions and user != ls.cu.sub:
         raise f.HTTPException(403, "Missing `create:lfg_sudo` scope.")
 
     # noinspection PyArgumentList
@@ -234,8 +268,7 @@ def lfg_post(
 )
 def lfg_get_single(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
         aid: int = f.Path(..., description="The aid of the LFG to retrieve."),
 ):
     """
@@ -243,10 +276,10 @@ def lfg_get_single(
 
     Requires the `read:lfg` scope.
     """
-    if "read:lfg" not in cu.permissions:
+    if "read:lfg" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `read:lfg` scope.")
 
-    lfg = session.execute(
+    lfg = ls.session.execute(
         ss.select(database.Announcement).where(database.Announcement.aid == aid)
     ).scalar()
 
@@ -263,8 +296,7 @@ def lfg_get_single(
 )
 def lfg_put(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
         aid: int = f.Path(..., description="The aid of the LFG to edit."),
         data: models.AnnouncementEditable = f.Body(..., description="The new data of the LFG.")
 ):
@@ -277,24 +309,24 @@ def lfg_put(
 
     If you're trying to edit a started or cancelled LFG, additionally requires the `edit:lfg_admin` scope.
     """
-    if "edit:lfg" not in cu.permissions:
+    if "edit:lfg" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `edit:lfg` scope.")
 
-    lfg = session.execute(
+    lfg = ls.session.execute(
         ss.select(database.Announcement).where(database.Announcement.aid == aid)
     ).scalar()
 
     if lfg is None:
         raise f.HTTPException(404, "No such LFG.")
 
-    if lfg.creator_id != cu.sub and "edit:lfg_sudo" not in cu.permissions:
+    if lfg.creator_id != ls.cu.sub and "edit:lfg_sudo" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `edit:lfg_sudo` scope.")
 
-    if lfg.state > database.AnnouncementState.OPEN and "edit:lfg_admin" not in cu.permissions:
+    if lfg.state > database.AnnouncementState.OPEN and "edit:lfg_admin" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `edit:lfg_admin` scope.")
 
     lfg.update(**data.dict())
-    session.commit()
+    ls.session.commit()
 
     if lfg.state == database.AnnouncementState.PLANNED:
         planned_event.set()
@@ -312,8 +344,7 @@ def lfg_put(
 )
 def lfg_delete(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
         aid: int = f.Path(..., description="The aid of the LFG to delete."),
 ):
     """
@@ -323,16 +354,16 @@ def lfg_delete(
 
     Requires the `delete:lfg_admin` scope.
     """
-    if "delete:lfg_admin" not in cu.permissions:
+    if "delete:lfg_admin" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `delete:lfg_admin` scope.")
 
-    lfg = session.execute(
+    lfg = ls.session.execute(
         ss.select(database.Announcement).where(database.Announcement.aid == aid)
     ).scalar()
 
     if lfg is not None:
-        session.delete(lfg)
-        session.commit()
+        ls.session.delete(lfg)
+        ls.session.commit()
 
     if lfg.state == database.AnnouncementState.PLANNED:
         planned_event.set()
@@ -350,8 +381,7 @@ def lfg_delete(
 )
 def lfg_start(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
 
         aid: int = f.Path(..., description="The id of the LFG that you want to start."),
         user: t.Optional[str] = f.Query(None, description="The id of the user you are acting on behalf of."),
@@ -365,23 +395,23 @@ def lfg_start(
 
     Additionally requires the `start:lfg_admin` if you're trying to start another user's LFG.
     """
-    if "start:lfg" not in cu.permissions:
+    if "start:lfg" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `start:lfg` scope.")
 
     if user is None:
-        user = cu.sub
+        user = ls.cu.sub
 
-    if "start:lfg_sudo" not in cu.permissions and user != cu.sub:
+    if "start:lfg_sudo" not in ls.cu.permissions and user != ls.cu.sub:
         raise f.HTTPException(403, "Missing `start:lfg_sudo` scope.")
 
-    lfg = session.execute(
+    lfg = ls.session.execute(
         ss.select(database.Announcement).where(database.Announcement.aid == aid)
     ).scalar()
 
     if lfg is None:
         raise f.HTTPException(404, "No such LFG.")
 
-    if "start:lfg_admin" not in cu.permissions and user != lfg.creator_id:
+    if "start:lfg_admin" not in ls.cu.permissions and user != lfg.creator_id:
         raise f.HTTPException(403, "Missing `start:lfg_admin` scope.")
 
     if lfg.state != database.AnnouncementState.OPEN:
@@ -391,9 +421,9 @@ def lfg_start(
     lfg.closure_time = datetime.datetime.now(tz=datetime.timezone.utc)
     lfg.closure_id = user
 
-    session.commit()
+    ls.session.commit()
 
-    send_message(session, models.EventAnnouncement(
+    send_message(ls.session, models.EventAnnouncement(
         type="start",
         announcement=models.AnnouncementFull.from_orm(lfg),
     ).json())
@@ -409,8 +439,7 @@ def lfg_start(
 )
 def lfg_cancel(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
 
         aid: int = f.Path(..., description="The id of the LFG that you want to cancel."),
         user: t.Optional[str] = f.Query(None, description="The id of the user you are acting on behalf of."),
@@ -424,23 +453,23 @@ def lfg_cancel(
 
     Additionally requires the `cancel:lfg_admin` if you're trying to start another user's LFG.
     """
-    if "cancel:lfg" not in cu.permissions:
+    if "cancel:lfg" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `cancel:lfg` scope.")
 
     if user is None:
-        user = cu.sub
+        user = ls.cu.sub
 
-    if "cancel:lfg_sudo" not in cu.permissions and user != cu.sub:
+    if "cancel:lfg_sudo" not in ls.cu.permissions and user != ls.cu.sub:
         raise f.HTTPException(403, "Missing `cancel:lfg_sudo` scope.")
 
-    lfg = session.execute(
+    lfg = ls.session.execute(
         ss.select(database.Announcement).where(database.Announcement.aid == aid)
     ).scalar()
 
     if lfg is None:
         raise f.HTTPException(404, "No such LFG.")
 
-    if "cancel:lfg_admin" not in cu.permissions and user != lfg.creator_id:
+    if "cancel:lfg_admin" not in ls.cu.permissions and user != lfg.creator_id:
         raise f.HTTPException(403, "Missing `cancel:lfg_admin` scope.")
 
     if lfg.state > database.AnnouncementState.OPEN:
@@ -450,9 +479,9 @@ def lfg_cancel(
     lfg.closure_time = datetime.datetime.now(tz=datetime.timezone.utc)
     lfg.closure_id = user
 
-    session.commit()
+    ls.session.commit()
 
-    send_message(session, models.EventAnnouncement(
+    send_message(ls.session, models.EventAnnouncement(
         type="cancel",
         announcement=models.AnnouncementFull.from_orm(lfg),
     ).json())
@@ -468,8 +497,7 @@ def lfg_cancel(
 )
 def lfg_answer_put(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
         fr: f.Response,
 
         aid: int = f.Path(..., description="The id of the LFG that should be answered."),
@@ -483,20 +511,20 @@ def lfg_answer_put(
 
     Additionally requires the `answer:lfg_sudo` scope if you are answering on behalf of another user.
     """
-    if "answer:lfg" not in cu.permissions:
+    if "answer:lfg" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `answer:lfg` scope.")
 
     if user is None:
-        user = cu.sub
+        user = ls.cu.sub
 
-    if "answer:lfg_sudo" not in cu.permissions and user != cu.sub:
+    if "answer:lfg_sudo" not in ls.cu.permissions and user != ls.cu.sub:
         raise f.HTTPException(403, "Missing `answer:lfg_sudo` scope.")
 
-    response = session.execute(
+    response = ls.session.execute(
         ss.select(database.Response).where(
             ss.and_(
                 database.Response.aid == aid,
-                database.Response.partecipant_id == cu.sub,
+                database.Response.partecipant_id == ls.cu.sub,
             )
         )
     ).scalar()
@@ -504,15 +532,15 @@ def lfg_answer_put(
     if response is None:
         # noinspection PyArgumentList
         response = database.Response(**data.dict(), aid=aid, partecipant_id=user)
-        session.add(response)
+        ls.session.add(response)
         fr.status_code = 201
     else:
         response.update(**data.dict())
         fr.status_code = 200
 
-    session.commit()
+    ls.session.commit()
 
-    send_message(session, models.EventResponse(
+    send_message(ls.session, models.EventResponse(
         type="answer",
         code=fr.status_code,
         response=models.ResponseFull.from_orm(response),
@@ -529,18 +557,17 @@ def lfg_answer_put(
 )
 def webhooks_get(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
 ):
     """
     Return a list of all configured webhooks.
 
     Requires the `read:webhooks` scope.
     """
-    if "read:webhooks" not in cu.permissions:
+    if "read:webhooks" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `read:webhooks` scope.")
 
-    results = session.execute(
+    results = ls.session.execute(
         ss.select(database.Webhook)
     ).scalars()
 
@@ -555,8 +582,7 @@ def webhooks_get(
 )
 def webhooks_post(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
 
         data: models.WebhookEditable = f.Body(..., description="The data that the created webhook should have.")
 ):
@@ -569,13 +595,13 @@ def webhooks_post(
 
     Requires the `create:webhooks` scope.
     """
-    if "create:webhooks" not in cu.permissions:
+    if "create:webhooks" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `create:webhooks` scope.")
 
     # noinspection PyArgumentList
     webhook = database.Webhook(**data.dict())
-    session.add(webhook)
-    session.commit()
+    ls.session.add(webhook)
+    ls.session.commit()
     return webhook
 
 
@@ -587,8 +613,7 @@ def webhooks_post(
 )
 def webhooks_delete(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
 
         wid: int = f.Path(..., description="The id of the webhook to delete."),
 ):
@@ -597,18 +622,18 @@ def webhooks_delete(
 
     Requires the `delete:webhooks` scope.
     """
-    if "delete:webhooks" not in cu.permissions:
+    if "delete:webhooks" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `delete:webhooks` scope.")
 
-    webhook = session.execute(
+    webhook = ls.session.execute(
         ss.select(database.Webhook).where(database.Webhook.wid == wid)
     ).scalar()
 
     if webhook is None:
         raise f.HTTPException(404, "No such webhook.")
 
-    session.delete(webhook)
-    session.commit()
+    ls.session.delete(webhook)
+    ls.session.commit()
     return f.Response(status_code=204)
 
 
@@ -620,8 +645,7 @@ def webhooks_delete(
 )
 def webhooks_test(
         *,
-        cu: auth.Auth0CustomClaims = f.Depends(CurrentUser),
-        session: so.Session = f.Depends(database.DatabaseSession),
+        ls: LoginSession = f.Depends(dep_loginsession),
 
         wid: int = f.Path(..., description="The id of the webhook to delete."),
 ):
@@ -630,10 +654,10 @@ def webhooks_test(
 
     Requires the `test:webhooks` scope.
     """
-    if "test:webhooks" not in cu.permissions:
+    if "test:webhooks" not in ls.cu.permissions:
         raise f.HTTPException(403, "Missing `test:webhooks` scope.")
 
-    webhook = session.execute(
+    webhook = ls.session.execute(
         ss.select(database.Webhook).where(database.Webhook.wid == wid)
     ).scalar()
 

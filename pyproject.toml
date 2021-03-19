@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "ryglfg"
-version = "2.0.0"
+version = "3.0.0"
 description = "The \"Looking For Group\" service of the RYG community"
 authors = ["Stefano Pigozzi <me@steffo.eu>"]
 license = "AGPL-3.0-or-later"

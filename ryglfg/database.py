@@ -53,6 +53,18 @@ def determine_default_autoclose_time(context):
     return context.get_current_parameters()["creation_time"] + datetime.timedelta(hours=1)
 
 
+class User(Base, ra.ColRepr, ra.Updatable):
+    __tablename__ = "users"
+
+    sub = s.Column("sub", s.String, primary_key=True)
+    last_update = s.Column("last_update", s.DateTime)
+
+    name = s.Column("name", s.String)
+    picture = s.Column("picture", s.String)
+
+    partecipations = so.relationship("Response", back_populates="partecipant", cascade="all, delete-orphan")
+
+
 class AnnouncementState(enum.IntEnum):
     PLANNED = -1
     OPEN = 0
@@ -67,16 +79,18 @@ class Announcement(Base, ra.ColRepr, ra.Updatable):
 
     title = s.Column("title", s.String, nullable=False, default="")
     description = s.Column("description", s.Text, nullable=False, default="")
-    creator_id = s.Column("creator_id", s.String, nullable=False)
+    creator_id = s.Column("creator_id", s.String, s.ForeignKey(User.sub), nullable=False)
     creation_time = s.Column("creation_time", s.DateTime(timezone=True), nullable=False,  default=now)
     editing_time = s.Column("editing_time", s.DateTime(timezone=True), nullable=False, default=now, onupdate=now)
     opening_time = s.Column("opening_time", s.DateTime(timezone=True), nullable=False, default=now)
     autostart_time = s.Column("autostart_time", s.DateTime(timezone=True), nullable=False, default=determine_default_autoclose_time)
-    closer_id = s.Column("closer_id", s.String)
+    closer_id = s.Column("closer_id", s.String, s.ForeignKey(User.sub))
     closure_time = s.Column("closure_time", s.DateTime(timezone=True))
     state = s.Column("state", s.Enum(AnnouncementState), nullable=False, default=AnnouncementState.PLANNED)
     
     responses = so.relationship("Response", back_populates="announcement", cascade="all, delete-orphan")
+    creator = so.relationship("User", foreign_keys=[creator_id], backref="creations")
+    closer = so.relationship("User", foreign_keys=[closer_id], backref="closures")
 
 
 class ResponseChoice(str, enum.Enum):
@@ -91,12 +105,13 @@ class Response(Base, ra.ColRepr, ra.Updatable):
     __tablename__ = "lfg_responses"
 
     aid = s.Column("aid", s.Integer, s.ForeignKey(Announcement.aid), primary_key=True)
-    partecipant_id = s.Column("partecipant_id", s.String, primary_key=True)
+    partecipant_id = s.Column("partecipant_id", s.String, s.ForeignKey(User.sub), primary_key=True)
 
     posting_time = s.Column("posting_time", s.DateTime(timezone=True), nullable=False, default=now)
     editing_time = s.Column("editing_time", s.DateTime(timezone=True), nullable=False, default=now, onupdate=now)
     choice = s.Column("choice", s.Enum(ResponseChoice), nullable=False, default=ResponseChoice.UNSET)
 
+    partecipant = so.relationship("User", back_populates="partecipations")
     announcement = so.relationship("Announcement", back_populates="responses")
 
 

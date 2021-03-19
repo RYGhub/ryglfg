@@ -29,6 +29,10 @@ class ORMModel(Model):
         orm_mode = True
 
 
+class UserEditable(ORMModel):
+    pass
+
+
 class AnnouncementEditable(ORMModel):
     title: str
     description: str
@@ -45,25 +49,38 @@ class WebhookEditable(ORMModel):
     format: WebhookFormat
 
 
+class UserBasic(UserEditable):
+    sub: str
+    last_update: datetime.datetime
+    name: str
+    picture: p.HttpUrl
+
+
 class AnnouncementBasic(AnnouncementEditable):
     aid: int
-    creator_id: str
+    creator: UserBasic
     creation_time: datetime.datetime
     editing_time: datetime.datetime
-    closer_id: t.Optional[str]
+    closer: t.Optional[UserBasic]
     closure_time: t.Optional[datetime.datetime]
     state: AnnouncementState
 
 
 class ResponseBasic(ResponseEditable):
     aid: int
-    partecipant_id: str
+    partecipant: UserBasic
     posting_time: datetime.datetime
     editing_time: datetime.datetime
 
 
 class WebhookBasic(WebhookEditable):
     wid: int
+
+
+class UserFull(UserBasic):
+    partecipations: t.List[ResponseBasic]
+    creations: t.List[AnnouncementBasic]
+    closures: t.List[AnnouncementBasic]
 
 
 class AnnouncementFull(AnnouncementBasic):

@@ -20,7 +20,7 @@ log = logging.getLogger(__name__)
 
 
 # Code
-class Auth0CustomClaims(p.BaseModel):
+class Auth0AccessClaims(p.BaseModel):
     iss: str
     sub: str
     aud: t.Union[t.List[str], str]
@@ -29,14 +29,16 @@ class Auth0CustomClaims(p.BaseModel):
     azp: str
     scope: str
     permissions: t.List[str]
+    ryg_name: str = p.Field(..., alias="https://meta.ryg.one/name")
+    ryg_picture: p.HttpUrl = p.Field(..., alias="https://meta.ryg.one/picture")
 
 
-class Auth0CustomUser(faca.Auth0CurrentUser):
-    user_info = Auth0CustomClaims
+class Auth0User(faca.Auth0CurrentUser):
+    user_info = Auth0AccessClaims
 
 
 # Objects exported by this module
 __all__ = (
-    "Auth0CustomClaims",
-    "Auth0CustomUser",
+    "Auth0AccessClaims",
+    "Auth0User",
 )
