@@ -18,6 +18,7 @@ import sqlalchemy.orm as so
 import sqlalchemy.sql as ss
 import requests
 import dataclasses
+import pkg_resources
 
 # Internal imports
 from . import globals
@@ -31,7 +32,7 @@ config = globals.lazy_config.evaluate()
 app = f.FastAPI(
     title="RYGlfg",
     description='The "Looking For Group" service of the RYG community',
-    version="1.0.0",
+    version=pkg_resources.get_distribution("ryglfg").version,
 )
 app.add_middleware(
     cors.CORSMiddleware,
