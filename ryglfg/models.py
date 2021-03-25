@@ -122,4 +122,7 @@ __all__ = (
     "Event",
     "EventAnnouncement",
     "EventResponse",
+    "UserEditable",
+    "UserBasic",
+    "UserFull",
 )
