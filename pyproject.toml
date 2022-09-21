@@ -7,7 +7,7 @@ license = "AGPL-3.0-or-later"
 
 [tool.poetry.dependencies]
 python = "^3.9"
-fastapi = "^0.63.0"
+fastapi = ">=0.63,<0.66"
 fastapi-cloudauth = "^0.3.0"
 SQLAlchemy = "^1.4.0b3"
 psycopg2 = "^2.8.6"
